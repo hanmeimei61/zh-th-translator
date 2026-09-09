@@ -302,9 +302,21 @@ voice_html = f"""
     }}
     let recognition = null;
     let recognizing = false;
+    function releaseMic() {{
+        if (recognition && recognizing) {{
+            try {{
+                // ★ 用 abort() 而不是 stop()，立即释放 mic 权限（iOS 上 stop() 会留尾巴）
+                recognition.abort();
+            }} catch (_) {{}}
+            recognizing = false;
+            btn.textContent = '🎤 点击开始语音输入';
+            btn.style.background = 'white';
+            status.textContent = '⏹ 已自动停止（页面切到后台）';
+        }}
+    }}
     btn.addEventListener('click', () => {{
         if (recognizing) {{
-            recognition.stop();
+            releaseMic();
             return;
         }}
         recognition = new SR();
@@ -348,12 +360,31 @@ voice_html = f"""
                 status.textContent = '❌ 请允许麦克风权限';
             }} else if (e.error === 'no-speech') {{
                 status.textContent = '⚠️ 没听到声音，再试一次';
+            }} else if (e.error === 'aborted') {{
+                status.textContent = '⏹ 已停止';
             }} else {{
                 status.textContent = '❌ ' + e.error;
             }}
         }};
         recognition.start();
     }});
+    // ★ 关键：监听页面可见性变化，自动释放麦克风
+    //   - iOS 后台 / 锁屏 / Home → visibilitychange
+    //   - 用户切到别的 app / 标签页 → visibilitychange
+    //   - 浏览器卸载 / 导航走 → pagehide / beforeunload
+    document.addEventListener('visibilitychange', () => {{
+        if (document.hidden) releaseMic();
+    }});
+    window.addEventListener('pagehide', releaseMic);
+    window.addEventListener('beforeunload', releaseMic);
+    // ★ 监听来自父页面（Streamlit 主页面）隐藏事件（iframe 不一定会触发自己的 visibilitychange）
+    try {{
+        window.parent.document.addEventListener('visibilitychange', () => {{
+            if (window.parent.document.hidden) releaseMic();
+        }});
+    }} catch (_) {{
+        // 跨域时可能捕获不到，忽略即可
+    }}
 }})();
 </script>
 """
@@ -452,6 +483,23 @@ if translate_clicked:
     if (typeof speechSynthesis.onvoiceschanged !== 'undefined') {{
         speechSynthesis.onvoiceschanged = () => pickVoice();
     }}
+    // ★ 切走页面时自动停止朗读（避免后台空响、节省电）
+    function autoStop() {{
+        if (speechSynthesis.speaking || speechSynthesis.pending) {{
+            speechSynthesis.cancel();
+            status.textContent = '⏹ 已停止（切后台）';
+        }}
+    }}
+    document.addEventListener('visibilitychange', () => {{
+        if (document.hidden) autoStop();
+    }});
+    window.addEventListener('pagehide', autoStop);
+    window.addEventListener('beforeunload', autoStop);
+    try {{
+        window.parent.document.addEventListener('visibilitychange', () => {{
+            if (window.parent.document.hidden) autoStop();
+        }});
+    }} catch (_) {{}}
 }})();
 </script>
 """
